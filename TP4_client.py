@@ -40,6 +40,21 @@ class Client:
         Si la création du compte s'est effectuée avec succès, l'attribut
         `_username` est mis à jour, sinon l'erreur est affichée.
         """
+        username = input("Nom d'utilisateur : ")
+        password = getpass.getpass("Mot de passe : ")
+
+        # Envoi de la requête d'inscription
+        auth_payload: AuthPayload = {"username": username, "password": password}
+        message: GloMessage = GloMessage({"header": Headers.AUTH_REGISTER, "payload": auth_payload})
+        send_mesg(self._socket, json.dumps(message))
+
+        # Réception de la réponse
+        response = recv_mesg(self._socket)
+        match json.loads(response):
+            case {"header": Headers.OK}:
+                self._username = username
+            case {"header": Headers.ERROR, "payload": payload}:
+                print(payload["error_message"])
 
     def _login(self) -> None:
         """
@@ -50,26 +65,21 @@ class Client:
         est mis à jour, sinon l'erreur est affichée.
         """
 
-        # username = input("Nom d'utilisateur : ")
-        # password = getpass.getpass("Mot de passe : ")
-        username = "test"
-        password = "test"
+        username = input("Nom d'utilisateur : ")
+        password = getpass.getpass("Mot de passe : ")
 
         # Preparation et envoi de la requête de connexion
         auth_payload: AuthPayload = {"username": username, "password": password}
         message: GloMessage = GloMessage({"header": Headers.AUTH_LOGIN, "payload": auth_payload})
-        print("sending auth")
         send_mesg(self._socket, json.dumps(message))
 
         # Réception de la réponse
-        # response = glosocket.recv_mesg(self._socket)
-        # print(response)  # TODO delete
-        # self._username = username
-        print("connection success")  # TODO
-        # if response["status"] == "success":
-        #     self._username = username
-        # else:
-        #     print("Erreur de connexion:", response["message"])
+        response = glosocket.recv_mesg(self._socket)
+        match json.loads(response):
+            case {"header": Headers.OK}:
+                self._username = username
+            case {"header": Headers.ERROR, "payload": payload}:
+                print(payload["error_message"])
 
     def _quit(self) -> None:
         """
@@ -124,12 +134,9 @@ class Client:
         should_quit = False
 
         while not should_quit:
-            print(len(self._username))
             if not self._username:
                 # Authentication menu
-                print("auth")  # TODO
                 try:
-                    self._login()
                     option = int(input(CLIENT_AUTH_CHOICE + "\nEntrez votre choix [1-3]: "))
                     if not (1 <= option <= 3):
                         raise ValueError()
@@ -141,13 +148,11 @@ class Client:
                         elif option == 3:
                             self._quit()
                             should_quit = True
-                    self._login()
                 except ValueError:
                     print("Rentrez une valeur dans l\'intervale demandé...")
 
             else:
                 try:
-                    print("handling action")  # TODO
                     option = int(input(CLIENT_USE_CHOICE + "\nEntrez votre choix [1-4]: "))
                     if not (1 <= option <= 4):
                         raise ValueError()

@@ -17,6 +17,7 @@ import sys
 import glosocket
 import gloutils
 from gloutils import *
+from glosocket import *
 
 
 class Server:
@@ -69,7 +70,26 @@ class Server:
         associe le socket au nouvel l'utilisateur et retourne un succès,
         sinon retourne un message d'erreur.
         """
-        return gloutils.GloMessage()
+        username = payload['username']
+        password = payload['password']
+        user_dir = os.path.join(gloutils.SERVER_DATA_DIR, username)
+
+        if os.path.exists(user_dir):
+            error_message = "La création a échouée:\n\t- Le nom d'utilisateur est invalide.\n\t- Le mot de passe n'est pas assez sûr."
+            error_payload: ErrorPayload = {"error_message": error_message}
+            message: GloMessage = GloMessage({"header": Headers.ERROR, "payload": error_payload})
+            send_mesg(client_soc, json.dumps(message))
+        else:
+            os.makedirs(user_dir)
+
+            # Stockage sécurisé du mot de passe
+            hashed_password = hashlib.sha256(password.encode()).hexdigest()
+            with open(os.path.join(user_dir, PASSWORD_FILENAME), 'w') as f:
+                f.write(hashed_password)
+
+            self._logged_users[client_soc] = username
+            message: GloMessage = GloMessage({"header": Headers.OK})
+            send_mesg(client_soc, json.dumps(message))
 
     def _login(self, client_soc: socket.socket, payload: gloutils.AuthPayload) -> gloutils.GloMessage:
         """
@@ -78,10 +98,28 @@ class Server:
         Si les identifiants sont valides, associe le socket à l'utilisateur et
         retourne un succès, sinon retourne un message d'erreur.
         """
+        username = payload['username']
+        password = payload['password']
+        user_dir = os.path.join(gloutils.SERVER_DATA_DIR, username)
 
-        print(payload)
+        authenticated = False
+        if os.path.exists(user_dir):
+            with open(os.path.join(user_dir, PASSWORD_FILENAME), 'r') as f:
+                stored_password = f.read()
+            hashed_password = hashlib.sha256(password.encode()).hexdigest()
+            if hashed_password == stored_password:
+                authenticated = True
+                message: GloMessage = GloMessage({"header": Headers.OK})
+                send_mesg(client_soc, json.dumps(message))
 
-        return gloutils.GloMessage(Headers.OK)
+        if not authenticated:
+            error_message = "Nom d'utilisateur ou mot de passe invalide."
+            error_payload: ErrorPayload = {"error_message": error_message}
+            message: GloMessage = GloMessage({"header": Headers.ERROR, "payload": error_payload})
+            send_mesg(client_soc, json.dumps(message))
+
+
+        self._logged_users[client_soc] = username
 
     def _logout(self, client_soc: socket.socket) -> None:
         """Déconnecte un utilisateur."""

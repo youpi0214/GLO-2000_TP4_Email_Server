@@ -14,6 +14,8 @@ import sys
 
 import glosocket
 import gloutils
+from gloutils import *
+from glosocket import *
 
 
 class Client:
@@ -26,6 +28,9 @@ class Client:
         Prépare un attribut `_username` pour stocker le nom d'utilisateur
         courant. Laissé vide quand l'utilisateur n'est pas connecté.
         """
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.connect((destination, gloutils.APP_PORT))
+        self._username = ""
 
     def _register(self) -> None:
         """
@@ -45,11 +50,34 @@ class Client:
         est mis à jour, sinon l'erreur est affichée.
         """
 
+        # username = input("Nom d'utilisateur : ")
+        # password = getpass.getpass("Mot de passe : ")
+        username = "test"
+        password = "test"
+
+        # Preparation et envoi de la requête de connexion
+        auth_payload: AuthPayload = {"username": username, "password": password}
+        message: GloMessage = GloMessage({"header": Headers.AUTH_LOGIN, "payload": auth_payload})
+        print("sending auth")
+        send_mesg(self._socket, json.dumps(message))
+
+        # Réception de la réponse
+        # response = glosocket.recv_mesg(self._socket)
+        # print(response)  # TODO delete
+        # self._username = username
+        print("connection success")  # TODO
+        # if response["status"] == "success":
+        #     self._username = username
+        # else:
+        #     print("Erreur de connexion:", response["message"])
+
     def _quit(self) -> None:
         """
         Préviens le serveur de la déconnexion avec l'entête `BYE` et ferme le
         socket du client.
         """
+        self._socket.send(gloutils.BYE, {"username": self._username})
+        self._socket.close()
 
     def _read_email(self) -> None:
         """
@@ -96,12 +124,44 @@ class Client:
         should_quit = False
 
         while not should_quit:
+            print(len(self._username))
             if not self._username:
                 # Authentication menu
-                pass
+                print("auth")  # TODO
+                try:
+                    self._login()
+                    option = int(input(CLIENT_AUTH_CHOICE + "\nEntrez votre choix [1-3]: "))
+                    if not (1 <= option <= 3):
+                        raise ValueError()
+                    else:
+                        if option == 1:
+                            self._register()
+                        elif option == 2:
+                            self._login()
+                        elif option == 3:
+                            self._quit()
+                            should_quit = True
+                    self._login()
+                except ValueError:
+                    print("Rentrez une valeur dans l\'intervale demandé...")
+
             else:
-                # Main menu
-                pass
+                try:
+                    print("handling action")  # TODO
+                    option = int(input(CLIENT_USE_CHOICE + "\nEntrez votre choix [1-4]: "))
+                    if not (1 <= option <= 4):
+                        raise ValueError()
+                    else:
+                        if option == 1:
+                            self._read_email()
+                        elif option == 2:
+                            self._send_email()
+                        elif option == 3:
+                            self._check_stats()
+                        elif option == 4:
+                            self._logout()
+                except ValueError:
+                    print("Rentrez une valeur dans l\'intervale demandé...")
 
 
 def _main() -> int:

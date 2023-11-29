@@ -16,6 +16,7 @@ import sys
 
 import glosocket
 import gloutils
+from gloutils import *
 
 
 class Server:
@@ -33,22 +34,30 @@ class Server:
 
         S'assure que les dossiers de données du serveur existent.
         """
-        # self._server_socket
-        # self._client_socs
-        # self._logged_users
-        # ...
+        self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server_socket.bind(("127.0.0.1", gloutils.APP_PORT))
+        self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server_socket.listen()
+        self._client_socs = []
+        self._logged_users = {}
 
     def cleanup(self) -> None:
         """Ferme toutes les connexions résiduelles."""
         for client_soc in self._client_socs:
-            client_soc.close()
+            self._remove_client(client_soc)
         self._server_socket.close()
 
     def _accept_client(self) -> None:
         """Accepte un nouveau client."""
+        client_soc, _ = self._server_socket.accept()
+        self._client_socs.append(client_soc)
+        print("new Connection! now,", len(self._client_socs), "clients connected")
 
     def _remove_client(self, client_soc: socket.socket) -> None:
         """Retire le client des structures de données et ferme sa connexion."""
+        client_soc.close()
+        self._client_socs.remove(client_soc)
+        self._logged_users.pop(client_soc, None)
 
     def _create_account(self, client_soc: socket.socket,
                         payload: gloutils.AuthPayload
@@ -62,21 +71,22 @@ class Server:
         """
         return gloutils.GloMessage()
 
-    def _login(self, client_soc: socket.socket, payload: gloutils.AuthPayload
-               ) -> gloutils.GloMessage:
+    def _login(self, client_soc: socket.socket, payload: gloutils.AuthPayload) -> gloutils.GloMessage:
         """
         Vérifie que les données fournies correspondent à un compte existant.
 
         Si les identifiants sont valides, associe le socket à l'utilisateur et
         retourne un succès, sinon retourne un message d'erreur.
         """
-        return gloutils.GloMessage()
+
+        print(payload)
+
+        return gloutils.GloMessage(Headers.OK)
 
     def _logout(self, client_soc: socket.socket) -> None:
         """Déconnecte un utilisateur."""
 
-    def _get_email_list(self, client_soc: socket.socket
-                        ) -> gloutils.GloMessage:
+    def _get_email_list(self, client_soc: socket.socket) -> gloutils.GloMessage:
         """
         Récupère la liste des courriels de l'utilisateur associé au socket.
         Les éléments de la liste sont construits à l'aide du gabarit
@@ -87,8 +97,7 @@ class Server:
         return gloutils.GloMessage()
 
     def _get_email(self, client_soc: socket.socket,
-                   payload: gloutils.EmailChoicePayload
-                   ) -> gloutils.GloMessage:
+                   payload: gloutils.EmailChoicePayload) -> gloutils.GloMessage:
         """
         Récupère le contenu de l'email dans le dossier de l'utilisateur associé
         au socket.
@@ -102,8 +111,7 @@ class Server:
         """
         return gloutils.GloMessage()
 
-    def _send_email(self, payload: gloutils.EmailContentPayload
-                    ) -> gloutils.GloMessage:
+    def _send_email(self, payload: gloutils.EmailContentPayload) -> gloutils.GloMessage:
         """
         Détermine si l'envoi est interne ou externe et:
         - Si l'envoi est interne, écris le message tel quel dans le dossier
@@ -118,12 +126,40 @@ class Server:
 
     def run(self):
         """Point d'entrée du serveur."""
-        waiters = []
+
+        print("server starts")
         while True:
+            waiters, _, _ = select.select([self._server_socket] + self._client_socs, [], [])
+
             # Select readable sockets
             for waiter in waiters:
                 # Handle sockets
-                pass
+                if waiter is self._server_socket:
+                    # ... Handle new connection
+                    self._accept_client()
+                else:
+                    # ... Handle existing connection
+                    try:
+                        data = glosocket.recv_mesg(waiter)
+                    except glosocket.GLOSocketError:
+                        self._remove_client(waiter)
+                        continue
+
+                    match json.loads(data):
+                        case {"header": Headers.AUTH_REGISTER, "payload": payload}:
+                            self._create_account(waiter, payload)
+                        case {"header": Headers.AUTH_LOGIN, "payload": payload}:
+                            self._login(waiter, payload)
+                        case {"header": Headers.AUTH_LOGOUT}:
+                            self._logout(waiter)
+                        case {"header": Headers.INBOX_READING_CHOICE, "payload": payload}:
+                            self._get_email(waiter, payload)
+                        case {"header": Headers.INBOX_READING_REQUEST}:
+                            self._get_email_list(waiter, payload)
+                        case {"header": Headers.EMAIL_SENDING}:
+                            self._send_email(waiter, payload)
+                        case {"header": Headers.STATS_REQUEST}:
+                            self._get_stats(waiter)
 
 
 def _main() -> int:

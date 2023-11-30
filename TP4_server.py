@@ -10,6 +10,8 @@ import hashlib
 import hmac
 import json
 import os
+import re
+
 import select
 import socket
 import sys
@@ -75,10 +77,10 @@ class Server:
         user_dir = os.path.join(gloutils.SERVER_DATA_DIR, username)
 
         if os.path.exists(user_dir):
+            print("oops")
             error_message = "La création a échouée:\n\t- Le nom d'utilisateur est invalide.\n\t- Le mot de passe n'est pas assez sûr."
-            error_payload: ErrorPayload = {"error_message": error_message}
-            message: GloMessage = GloMessage({"header": Headers.ERROR, "payload": error_payload})
-            send_mesg(client_soc, json.dumps(message))
+            error_payload: ErrorPayload = ErrorPayload(error_message=error_message)
+            return GloMessage(header=Headers.ERROR, payload=error_payload)
         else:
             os.makedirs(user_dir)
 
@@ -88,8 +90,7 @@ class Server:
                 f.write(hashed_password)
 
             self._logged_users[client_soc] = username
-            message: GloMessage = GloMessage({"header": Headers.OK})
-            send_mesg(client_soc, json.dumps(message))
+            return GloMessage(header=Headers.OK)
 
     def _login(self, client_soc: socket.socket, payload: gloutils.AuthPayload) -> gloutils.GloMessage:
         """
@@ -105,21 +106,19 @@ class Server:
         authenticated = False
         if os.path.exists(user_dir):
             with open(os.path.join(user_dir, PASSWORD_FILENAME), 'r') as f:
-                stored_password = f.read()
+                stored_password_hash = f.read()
             hashed_password = hashlib.sha256(password.encode()).hexdigest()
-            if hashed_password == stored_password:
+            resultat = hmac.compare_digest(hashed_password, stored_password_hash)
+
+            if resultat:
                 authenticated = True
-                message: GloMessage = GloMessage({"header": Headers.OK})
-                send_mesg(client_soc, json.dumps(message))
+                self._logged_users[client_soc] = username
+                return GloMessage(header=Headers.OK)
 
         if not authenticated:
             error_message = "Nom d'utilisateur ou mot de passe invalide."
-            error_payload: ErrorPayload = {"error_message": error_message}
-            message: GloMessage = GloMessage({"header": Headers.ERROR, "payload": error_payload})
-            send_mesg(client_soc, json.dumps(message))
-
-
-        self._logged_users[client_soc] = username
+            error_payload: ErrorPayload = ErrorPayload(error_message=error_message)
+            return GloMessage(header=Headers.ERROR, payload=error_payload)
 
     def _logout(self, client_soc: socket.socket) -> None:
         """Déconnecte un utilisateur."""
@@ -132,7 +131,24 @@ class Server:
 
         Une absence de courriel n'est pas une erreur, mais une liste vide.
         """
-        return gloutils.GloMessage()
+        username = self._logged_users.get(client_soc)
+        user_dir = os.path.join(gloutils.SERVER_DATA_DIR, username)
+        email_list = []
+
+        number = 1
+        for email_file in sorted(os.listdir(user_dir), reverse=True):
+            with open(os.path.join(user_dir, email_file), 'r') as file:
+                email_content = file.read()
+                # "#{number} {sender} - {subject} {date}"
+                sender = email_content["sender"]
+                subject = email_content["subject"]
+                date = email_content["date"]
+                print(email_content)
+                email_list.append(SUBJECT_DISPLAY.format(number=number, subject=subject, sender=sender, date=date))
+                number += 1
+
+        email_list_payload: EmailListPayload = EmailListPayload(email_list=email_list)
+        return GloMessage(header=Headers.OK, payload=email_list_payload)
 
     def _get_email(self, client_soc: socket.socket,
                    payload: gloutils.EmailChoicePayload) -> gloutils.GloMessage:
@@ -140,7 +156,12 @@ class Server:
         Récupère le contenu de l'email dans le dossier de l'utilisateur associé
         au socket.
         """
-        return gloutils.GloMessage()
+        username = self._logged_users.get(client_soc)
+        user_dir = os.path.join(gloutils.SERVER_DATA_DIR, username)
+        email_file = payload["choice"]
+
+        with open(os.path.join(user_dir, email_file), 'r') as file:
+            email_content = json.load(file)
 
     def _get_stats(self, client_soc: socket.socket) -> gloutils.GloMessage:
         """
@@ -160,7 +181,32 @@ class Server:
 
         Retourne un messange indiquant le succès ou l'échec de l'opération.
         """
-        return gloutils.GloMessage()
+
+        recipient_pattern = r'([^@]+)@'
+        domain_pattern = r'@([^@]+)$'
+        recipient = re.search(recipient_pattern, payload["destination"]).group(1)
+        domain = re.search(domain_pattern, payload["destination"]).group(1)
+
+        found_recipient = False
+
+        if domain:
+            recipient_dir = os.path.join(gloutils.SERVER_DATA_DIR, recipient)
+            if os.path.exists(recipient_dir):
+                found_recipient = True
+                email_file = os.path.join(recipient_dir, f"{payload['subject']}.json")
+                with open(email_file, 'w') as file:
+                    json.dump(dict(payload), file)
+                return GloMessage(header=Headers.OK)
+
+        if not found_recipient:
+            if domain:
+                lost_dir = os.path.join(gloutils.SERVER_LOST_DIR, f"{payload['subject']}.json")
+                with open(lost_dir, 'w') as file:
+                    json.dump(dict(payload), file, indent=2)
+            # Retourne un messange indiquant le succès ou l'échec de l'opération
+            error_message = "Échec de l'envoi du courriel"
+            error_payload: ErrorPayload = ErrorPayload(error_message=error_message)
+            return GloMessage(header=Headers.ERROR, payload=error_payload)
 
     def run(self):
         """Point d'entrée du serveur."""
@@ -185,19 +231,26 @@ class Server:
 
                     match json.loads(data):
                         case {"header": Headers.AUTH_REGISTER, "payload": payload}:
-                            self._create_account(waiter, payload)
+                            answer = self._create_account(waiter, payload)
+                            send_mesg(waiter, json.dumps(answer))
                         case {"header": Headers.AUTH_LOGIN, "payload": payload}:
-                            self._login(waiter, payload)
+                            answer = self._login(waiter, payload)
+                            send_mesg(waiter, json.dumps(answer))
                         case {"header": Headers.AUTH_LOGOUT}:
-                            self._logout(waiter)
+                            answer = self._logout(waiter)
+                            send_mesg(waiter, json.dumps(answer))
                         case {"header": Headers.INBOX_READING_CHOICE, "payload": payload}:
-                            self._get_email(waiter, payload)
+                            answer = self._get_email(waiter, payload)
+                            send_mesg(waiter, json.dumps(answer))
                         case {"header": Headers.INBOX_READING_REQUEST}:
-                            self._get_email_list(waiter, payload)
-                        case {"header": Headers.EMAIL_SENDING}:
-                            self._send_email(waiter, payload)
+                            answer = self._get_email_list(waiter)
+                            send_mesg(waiter, json.dumps(answer))
+                        case {"header": Headers.EMAIL_SENDING, "payload": payload}:
+                            answer = self._send_email(payload)
+                            send_mesg(waiter, json.dumps(answer))
                         case {"header": Headers.STATS_REQUEST}:
-                            self._get_stats(waiter)
+                            answer = self._get_stats(waiter)
+                            send_mesg(waiter, json.dumps(answer))
 
 
 def _main() -> int:

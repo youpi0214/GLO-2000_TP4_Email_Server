@@ -44,8 +44,8 @@ class Client:
         password = getpass.getpass("Mot de passe : ")
 
         # Envoi de la requête d'inscription
-        auth_payload: AuthPayload = {"username": username, "password": password}
-        message: GloMessage = GloMessage({"header": Headers.AUTH_REGISTER, "payload": auth_payload})
+        auth_payload: AuthPayload = AuthPayload(username=username, password=password)
+        message: GloMessage = GloMessage(header=Headers.AUTH_REGISTER, payload=auth_payload)
         send_mesg(self._socket, json.dumps(message))
 
         # Réception de la réponse
@@ -69,8 +69,8 @@ class Client:
         password = getpass.getpass("Mot de passe : ")
 
         # Preparation et envoi de la requête de connexion
-        auth_payload: AuthPayload = {"username": username, "password": password}
-        message: GloMessage = GloMessage({"header": Headers.AUTH_LOGIN, "payload": auth_payload})
+        auth_payload: AuthPayload = AuthPayload(username=username, password=password)
+        message: GloMessage = GloMessage(header=Headers.AUTH_LOGIN, payload=auth_payload)
         send_mesg(self._socket, json.dumps(message))
 
         # Réception de la réponse
@@ -102,6 +102,26 @@ class Client:
         S'il n'y a pas de courriel à lire, l'utilisateur est averti avant de
         retourner au menu principal.
         """
+        # Preparation et envoi de la requête de demande de liste de courriel
+        message: GloMessage = GloMessage(header=Headers.INBOX_READING_REQUEST)
+        send_mesg(self._socket, json.dumps(message))
+
+        # Réception de la liste des courriels
+        response = recv_mesg(self._socket)
+        match json.loads(response):
+            case {"header": Headers.INBOX_READING_REQUEST, "payload": payload}:
+                email_list = payload["email_list"]
+                if not email_list:
+                    print("Aucun courriel à lire.")
+                else:
+                    for email in email_list:
+                        print(email)
+                    choice = int(input(f"Entrez votre choix [1-{len(email_list)}]: "))
+
+                    # Preparation et envoi de la requête de demande de lecture de courriel
+                    choice_payload = EmailChoicePayload(choice=choice)
+                    message: GloMessage = GloMessage(header=Headers.INBOX_READING_CHOICE, payload=choice_payload)
+                    send_mesg(self._socket, json.dumps(message))
 
     def _send_email(self) -> None:
         """
@@ -114,6 +134,28 @@ class Client:
 
         Transmet ces informations avec l'entête `EMAIL_SENDING`.
         """
+        # Récupération des données pour les champs du courriel
+        mail_to: str = input("Entrez l'adresse du destinataire: ")
+        subject: str = input("Entrez le sujet: ")
+        print("Entrez le contenu du courriel, terminez la saisie avec un '.' seul sur une ligne:")
+        content = ""
+        buffer = ""
+        while (buffer != ".\n"):
+            content += buffer
+            buffer = input() + '\n'
+
+        email_payload: EmailContentPayload = EmailContentPayload(sender=f"{self._username}@{SERVER_DOMAIN}",
+                                                                 destination=mail_to, subject=subject,
+                                                                 date=get_current_utc_time(), content=content)
+        message: GloMessage = GloMessage(header=Headers.EMAIL_SENDING, payload=email_payload)
+        send_mesg(self._socket, json.dumps(message))
+
+        response = recv_mesg(self._socket)
+        match json.loads(response):
+            case {"header": Headers.OK}:
+                pass
+            case {"header": Headers.ERROR, "payload": payload}:
+                print(payload["error_message"])
 
     def _check_stats(self) -> None:
         """
